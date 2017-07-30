@@ -21,11 +21,14 @@ def normalize(x):
     # utility function to normalize a tensor by its L2 norm
     return x / (K.sqrt(K.mean(K.square(x))) + 1e-5)
 
+def norm_img(x):
+    img = np.float32(x)
+    return (img - img.mean() / np.std(img))/255.0
+
 def load_image(img_path):
     img = image.load_img(img_path, target_size=(120, 160))
     x = image.img_to_array(img)
     x = np.expand_dims(x, axis=0)
-    #x = x.astype('float32')/255 - 0.5
     return x
 
 def register_gradient():
@@ -67,6 +70,7 @@ def grad_cam(input_model, image, category_index, layer_name):
 
     loss = model.output[0][:, category_index]
     conv_output = model.get_layer(layer_name).output
+    #grads = normalize(K.gradients(loss, conv_output)[0])
     grads = normalize(K.gradients(loss, conv_output)[0])
     gradient_function = K.function([model.input, K.learning_phase()], [conv_output, grads])
 
@@ -90,11 +94,18 @@ def grad_cam(input_model, image, category_index, layer_name):
     #image -= np.min(image)
     #image = np.minimum(image, 255)
 
+    cam = mix_heatmap(image, heatmap)
+    return cam, heatmap
+
+
+def mix_heatmap(img, heatmap):
+    if len(img.shape) > 3:
+        img = img[0]
     cam = cv2.applyColorMap(np.uint8(255*heatmap), cv2.COLORMAP_JET)
-    cam = np.float32(cam) + np.float32(image)
+    cam = np.float32(cam) + np.float32(img)
     cam = 255 * cam / np.max(cam)
     cam = np.uint8(cam)
-    return cam, heatmap
+    return cam
 
 
 model = load_model(modelpath)
@@ -112,13 +123,17 @@ nfiles = len(os.listdir(IMGDIR))
 for ifile, fname in enumerate(os.listdir(IMGDIR)):
     path = os.path.join(IMGDIR, fname)
     if '.jpg' not in path: continue
-    preprocessed_input = load_image(path)
+    original_input = load_image(path)
+    preprocessed_input = norm_img(original_input)
     predictions = model.predict(preprocessed_input)
     predicted_class = np.argmax(predictions[0][0])
     cam, heatmap = grad_cam(model, preprocessed_input, predicted_class, 'conv2d_5')
-    #cv2.imwrite("gradcam.jpg", cam)
     if (ifile % 100 == 0): print('%.2f' % (ifile*100./nfiles))
-    video.write(cam)
-    if (ifile > 100): break
+    img = np.uint8( original_input[0] )
+    img = mix_heatmap(original_input, heatmap)
+    #cv2.imwrite("gradcam.jpg", img)
+    #video.write(original_input[0])
+    video.write(img)
+    if (ifile > 300): break
 
 video.release()
